@@ -11,4 +11,8 @@ view_config - Usage: /view_config
 set_config - Usage: /setconfig SETTING=VALUE SETTING=VALUE
 emails - Usage: /emails VIEW/ADD/REMOVE email@email.com,email@email.com
 channels - Usage: /channels VIEW/ADD/REMOVE ID,ID,ID
+setchannel - Usage: /setchannel <CHANNEL_ID>
+testchannel - Usage: /testchannel <optional_CHANNEL_ID>
+myplan - Usage: /myplan
+admin_setplan - Usage: /admin_setplan <USER_ID> <PLAN>
 admins - Usage: /admins VIEW/ADD/REMOVE ID,ID,ID

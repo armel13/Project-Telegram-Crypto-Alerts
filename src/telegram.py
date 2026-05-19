@@ -17,6 +17,7 @@ from .utils import (
     parse_trigger_cooldown,
 )
 from .config import *
+from .config import PLANS
 from .indicators import TADatabaseClient, TaapiioProcess
 from .models import TechnicalAlert, CEXAlert
 
@@ -56,6 +57,15 @@ class TelegramBot(TeleBot):
                 message,
                 f"{message.from_user.username}'s Telegram ID:\n{message.from_user.id}",
             )
+
+        @self.message_handler(commands=["start"])
+        def on_start(message):
+            msg = (
+                "Welcome to the Managed Telegram Crypto Alerts service.\n\n"
+                "Disclaimer: This bot is a market monitoring tool only. The information provided by this bot does not constitute investment advice, financial advice, trading advice, or any other sort of advice. You should not treat any of the bot's content as such. Do conduct your own due diligence and consult your financial advisor before making any investment decisions.\n\n"
+                "Use /help to view all commands."
+            )
+            self.reply_to(message, msg)
 
         @self.message_handler(commands=["help"])
         @self.is_whitelisted
@@ -162,14 +172,13 @@ class TelegramBot(TeleBot):
                 configuration = BaseConfig(str(message.from_user.id))
                 alerts_db = configuration.load_alerts()
 
-                if MAX_ALERTS_PER_USER is not None:
-                    if (
-                        sum(len(alerts) for alerts in alerts_db.values())
-                        >= MAX_ALERTS_PER_USER
-                    ):
-                        raise OverflowError(
-                            f"Maximum active alerts reached ({MAX_ALERTS_PER_USER})"
-                        )
+                plan = configuration.get_plan()
+                plan_limit = PLANS.get(plan, PLANS["free"])
+
+                if sum(len(alerts) for alerts in alerts_db.values()) >= plan_limit:
+                    raise OverflowError(
+                        f"Maximum active alerts reached ({plan_limit}) for your '{plan}' plan. Please contact an admin to upgrade."
+                    )
 
                 if indicator_instance.type == "s":
                     # Handle simple indicator:
@@ -520,6 +529,93 @@ class TelegramBot(TeleBot):
 
         """------ ADMINISTRATOR COMMANDS: ------"""
 
+        @self.message_handler(commands=["myplan"])
+        @self.is_whitelisted
+        def on_myplan(message):
+            user_id = str(message.from_user.id)
+            configuration = BaseConfig(user_id)
+            plan = configuration.get_plan()
+            plan_limit = PLANS.get(plan, PLANS["free"])
+            alerts_db = configuration.load_alerts()
+            active_alerts = sum(len(alerts) for alerts in alerts_db.values())
+
+            msg = (
+                f"Your Current Plan: {plan}\n"
+                f"Alert Quota: {active_alerts} / {plan_limit} active alerts\n\n"
+                "If you wish to upgrade, please contact an administrator."
+            )
+            self.reply_to(message, msg)
+
+        @self.message_handler(commands=["admin_setplan"])
+        @self.is_admin
+        def on_admin_setplan(message):
+            splt_msg = self.split_message(message.text)
+            if len(splt_msg) != 2:
+                self.reply_to(message, "Usage: /admin_setplan <USER_ID> <PLAN>\nAvailable plans: free, basic, pro, white_label")
+                return
+
+            target_user = splt_msg[0]
+            new_plan = splt_msg[1].lower()
+
+            if new_plan not in PLANS:
+                self.reply_to(message, f"Invalid plan. Available plans: {', '.join(PLANS.keys())}")
+                return
+
+            try:
+                target_config = BaseConfig(target_user)
+                target_config.set_plan(new_plan)
+                self.reply_to(message, f"Successfully updated user {target_user} to plan '{new_plan}'.")
+            except Exception as exc:
+                self.reply_to(message, f"Failed to set plan: {exc}")
+
+        @self.message_handler(commands=["setchannel"])
+        @self.is_whitelisted
+        def on_setchannel(message):
+            splt_msg = self.split_message(message.text)
+            if len(splt_msg) != 1:
+                self.reply_to(message, "Usage: /setchannel <CHANNEL_ID>\nTo remove your channel, use /channels REMOVE <CHANNEL_ID>")
+                return
+
+            channel_id = splt_msg[0]
+            user_id = str(message.from_user.id)
+
+            try:
+                configuration = BaseConfig(user_id)
+                config = configuration.load_config()
+                # Overwrite the channels list with just this channel, and the user ID so they also get it privately?
+                # The user wants to replace the list. We will just set it to this one channel.
+                # If they want private chat, their user_id should be in there.
+                # Fallback logic: if channels is empty, it should use the user's private chat.
+                # Here we just set the list to the configured channel.
+                config["channels"] = [channel_id]
+                configuration.update_config(config)
+                self.reply_to(message, f"Successfully set alert destination to {channel_id}.\nYou can verify permissions using /testchannel")
+            except Exception as exc:
+                self.reply_to(message, f"An error occurred: {exc}")
+
+        @self.message_handler(commands=["testchannel"])
+        @self.is_whitelisted
+        def on_testchannel(message):
+            splt_msg = self.split_message(message.text)
+            user_id = str(message.from_user.id)
+            configuration = BaseConfig(user_id)
+
+            if len(splt_msg) > 0:
+                channel_id = splt_msg[0]
+            else:
+                channels = configuration.get_channels()
+                if not channels:
+                    self.reply_to(message, "You don't have any channels set. Usage: /testchannel <CHANNEL_ID>")
+                    return
+                # use the first one that is not the user_id, or just the first one
+                channel_id = channels[-1]
+
+            try:
+                self.send_message(channel_id, "This is a test message from Managed Telegram Crypto Alerts.\n\nPermissions are configured correctly.")
+                self.reply_to(message, f"Test message successfully sent to {channel_id}.")
+            except Exception as exc:
+                self.reply_to(message, f"Failed to send message to {channel_id}.\nMake sure the bot is added as an administrator with posting rights.\nError: {exc}")
+
         @self.message_handler(commands=["whitelist"])
         @self.is_admin
         def on_whitelist(message):
@@ -528,7 +624,7 @@ class TelegramBot(TeleBot):
                 if splt_msg[0].lower() == "add":
                     new_users = splt_msg[1].split(",")
                     for user in new_users:
-                        BaseConfig(user).whitelist_user()
+                        BaseConfig(user).whitelist_user(username=message.from_user.username)
                     self.reply_to(message, f"Whitelisted Users: {', '.join(new_users)}")
                 elif splt_msg[0].lower() == "remove":
                     rm_users = splt_msg[1].split(",")

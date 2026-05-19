@@ -2,6 +2,7 @@ import json
 import shutil
 
 from .config import *
+from .config import PLANS
 from .mongo import MongoDBConnection
 
 # Activate mongo DB connection if needed
@@ -25,7 +26,7 @@ class LocalUserConfiguration:
         self.default_alerts_path = join(RESOURCES_ROOT, "default_alerts.json")
         self.default_config_path = join(RESOURCES_ROOT, "default_config.json")
 
-    def whitelist_user(self, is_admin: bool = False):
+    def whitelist_user(self, is_admin: bool = False, username: str = None):
         """Add necessary files and directories to database for TG user ID"""
 
         # Return if user data directory already exists
@@ -36,12 +37,24 @@ class LocalUserConfiguration:
         mkdir(self.user_config_root)
 
         try:
+            from datetime import datetime
+
             # Make default configuration:
             with open(self.default_config_path, "r") as _in:
                 default_config = json.loads(_in.read())
+
+            # Add user properties
             default_config["channels"].append(self.user_id)
             if is_admin:
                 default_config["is_admin"] = True
+
+            default_config["telegram_id"] = self.user_id
+            if username:
+                default_config["username"] = username
+            default_config["plan"] = "free"
+            default_config["max_alerts"] = PLANS.get("free", 3)
+            default_config["created_at"] = datetime.utcnow().isoformat()
+            default_config["updated_at"] = datetime.utcnow().isoformat()
             with open(self.config_path, "w") as _out:
                 _out.write(json.dumps(default_config, indent=2))
 
@@ -81,10 +94,22 @@ class LocalUserConfiguration:
         if new_value is not None:
             config["is_admin"] = new_value
             self.update_config(config)
-        return config["is_admin"]
+        return config.get("is_admin", False)
+
+    def get_plan(self) -> str:
+        config = self.load_config()
+        return config.get("plan", "free")
+
+    def set_plan(self, plan: str) -> None:
+        config = self.load_config()
+        from datetime import datetime
+        config["plan"] = plan
+        config["max_alerts"] = PLANS.get(plan, 3)
+        config["updated_at"] = datetime.utcnow().isoformat()
+        self.update_config(config)
 
     def get_channels(self) -> list[str]:
-        return self.load_config()["channels"]
+        return self.load_config().get("channels", [])
 
     def add_channels(self, channels: list[str]) -> None:
         config = self.load_config()
@@ -119,7 +144,7 @@ class MongoDBUserConfiguration(LocalUserConfiguration):
         # Additional variables required for MongoDB
         self.filter = {"user_id": self.user_id}
 
-    def whitelist_user(self, is_admin: bool = False):
+    def whitelist_user(self, is_admin: bool = False, username: str = None):
         """OVERRIDES SUPER - Add necessary files and directories to database for TG user ID"""
 
         # Return if user data directory already exists
@@ -129,12 +154,25 @@ class MongoDBUserConfiguration(LocalUserConfiguration):
         # Prepare default user document
         user_document = {"user_id": self.user_id}
         try:
+            from datetime import datetime
+
             # Make default configuration:
             with open(self.default_config_path, "r") as _in:
                 default_config = json.loads(_in.read())
+
+            # Add user properties
             default_config["channels"].append(self.user_id)
             if is_admin:
                 default_config["is_admin"] = True
+
+            default_config["telegram_id"] = self.user_id
+            if username:
+                default_config["username"] = username
+            default_config["plan"] = "free"
+            default_config["max_alerts"] = PLANS.get("free", 3)
+            default_config["created_at"] = datetime.utcnow().isoformat()
+            default_config["updated_at"] = datetime.utcnow().isoformat()
+
             user_document["config"] = default_config
 
             # Make default alerts
@@ -188,6 +226,22 @@ class MongoDBUserConfiguration(LocalUserConfiguration):
         db_connection.collection.update_one(
             self.filter, {"$set": {"config": data}}, upsert=True
         )
+
+
+
+    def get_plan(self) -> str:
+        """OVERRIDES SUPER - Get the plan from the user document"""
+        config = self.load_config()
+        return config.get("plan", "free")
+
+    def set_plan(self, plan: str) -> None:
+        """OVERRIDES SUPER - Set the plan in the user document"""
+        config = self.load_config()
+        from datetime import datetime
+        config["plan"] = plan
+        config["max_alerts"] = PLANS.get(plan, 3)
+        config["updated_at"] = datetime.utcnow().isoformat()
+        self.update_config(config)
 
 
 def get_whitelist() -> list:

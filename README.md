@@ -56,6 +56,8 @@
 
 The primary goal of _Telegram Crypto Alerts_ is to be a lightweight, intuitive, and modular cryptocurrency price alert bot for the Telegram messaging client.
 
+> ⚠️ **DISCLAIMER:** This bot is a market monitoring tool only. The information provided by this bot does not constitute investment advice, financial advice, trading advice, or any other sort of advice. You should not treat any of the bot's content as such. Do conduct your own due diligence and consult your financial advisor before making any investment decisions.
+
 The bot utilizes Telegram's simple chat interface to provide users the following features:
 * Get live crypto pair prices from Binance, and receive alerts on price movements like **_above_**, **_below_**, **_% change_**, and **_24 hour % change_**
 * Receive alerts on crypto technical indicators like **_RSI_**, **_MACD_**, **_Bollinger Bands_**, _**MA**_, **_SMA_**, and **_EMA_**.
@@ -69,9 +71,17 @@ The bot utilizes Telegram's simple chat interface to provide users the following
 
 This bot is designed to be easily extensible and deployable on a variety of platforms. The following are the available deployment options.:
 
-### Managed Deployment (Recommended)
+### Managed Commercial Hosting Service
 
-I will choose the most cost-efficient and performant platform and deploy the bot for you. I will then manage the bot for a small fee. Please go to and fill out the form below to request a quote:
+This repository has been adapted to provide a paid managed Telegram crypto alert service for Telegram crypto groups and channels.
+If you are looking for a completely hands-off setup, we offer managed hosting, maintenance, and setup services.
+
+Key additions for the managed service:
+- **User Plans:** tiered active alert limits (free: 3, basic: 10, pro: 30, white_label: 100).
+- **Client Management:** `/myplan`, `/setchannel`, and `/testchannel` commands to manage where alerts go.
+- **Admin Control:** `/admin_setplan` to manage client subscriptions.
+
+_See `NOTICE.md` for full details regarding modifications made to the original MIT project._
 
 > Click Here: [🔗**Managed Hosting Request Form**](https://forms.gle/hCVQsYDjRWx5CZJh7)
 

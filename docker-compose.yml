@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: telegram_crypto_alerts
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./src/whitelist:/app/src/whitelist
+      - ./logs:/app/logs
+      - ./src/temp:/app/src/temp

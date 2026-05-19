@@ -10,9 +10,12 @@ SIMPLE_INDICATORS = ["PRICE"]
 SIMPLE_INDICATOR_COMPARISONS = ["ABOVE", "BELOW", "PCTCHG", "24HRCHG"]
 
 """Telegram Handler Configuration"""
-MAX_ALERTS_PER_USER = (
-    10  # Integer or None (Should be set in a static configuration file)
-)
+PLANS = {
+    "free": 3,
+    "basic": 10,
+    "pro": 30,
+    "white_label": 100
+}
 
 """BINANCE DATA CONFIG"""
 BINANCE_LOCATIONS = ["us", "global"]

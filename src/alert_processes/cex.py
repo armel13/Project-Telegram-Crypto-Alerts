@@ -86,7 +86,7 @@ class CEXAlertProcess(BaseAlertProcess):
             for post, pair in post_queue:
                 logger.info(post)
                 status = self.tg_alert(
-                    post=post, channel_ids=config["channels"], pair=pair
+                    post=post, channel_ids=config.get("channels") if config.get("channels") else [tg_user_id], pair=pair
                 )
                 if len(status[1]) > 0:
                     logger.warn(
@@ -246,11 +246,12 @@ class CEXAlertProcess(BaseAlertProcess):
         if pair:
             pair_fmt = pair.replace("/", "_")
             post += f"\n\n<a href='https://www.binance.com/en/trade/{pair_fmt}?type=spot'><b>View {pair} Chart</b></a>"
+
+        post += "\n\n<i>*Not financial advice. Market monitoring only.</i>"
+
         output = ([], [])
         for g_id in channel_ids:
             try:
-                # requests.post(url=f'https://api.telegram.org/bot{self.tg_bot_token}/sendMessage',
-                #               params={'chat_id': g_id, 'text': header_str + post, "parse_mode": "HTML"})
                 self.telegram_bot.send_message(
                     chat_id=g_id,
                     text=post,
