@@ -1,5 +1,6 @@
 {
   "settings": {},
   "channels": [],
-  "is_admin": false
+  "is_admin": false,
+  "plan": "free"
 }

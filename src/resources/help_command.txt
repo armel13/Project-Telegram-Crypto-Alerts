@@ -1,2 +1,6 @@
+Welcome to the Managed Telegram Crypto Alerts service.
+
 You can view the bot commands here:
 https://github.com/hschickdevs/Telegram-Crypto-Alerts#telegram-bot-commands
+
+Disclaimer: This bot is a market monitoring tool only. The information provided by this bot does not constitute investment advice, financial advice, trading advice, or any other sort of advice. You should not treat any of the bot's content as such. Do conduct your own due diligence and consult your financial advisor before making any investment decisions.
