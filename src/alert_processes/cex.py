@@ -2,6 +2,7 @@ import time
 from datetime import datetime
 import os
 import urllib3
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from ..user_configuration import (
@@ -88,7 +89,13 @@ class CEXAlertProcess(BaseAlertProcess):
             for post, pair in post_queue:
                 logger.info(post)
                 status = self.tg_alert(
-                    post=post, channel_ids=config.get("channels") if config.get("channels") else [tg_user_id], pair=pair
+                    post=post,
+                    channel_ids=(
+                        config.get("channels")
+                        if config.get("channels")
+                        else [tg_user_id]
+                    ),
+                    pair=pair,
                 )
                 if len(status[1]) > 0:
                     logger.warn(
