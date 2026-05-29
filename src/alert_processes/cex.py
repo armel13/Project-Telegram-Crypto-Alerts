@@ -1,6 +1,8 @@
 import time
 from datetime import datetime
 import os
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from ..user_configuration import (
     LocalUserConfiguration,
@@ -181,7 +183,7 @@ class CEXAlertProcess(BaseAlertProcess):
         url = self.endpoint.format(token_pair, BINANCE_TIMEFRAMES[0])
         try:
 
-            response = requests.get(url)
+            response = requests.get(url, verify=False)
             response.raise_for_status()
 
             return BinancePriceResponse(response.json()).lastPrice
@@ -219,7 +221,7 @@ class CEXAlertProcess(BaseAlertProcess):
         )
         url = self.endpoint.format(token_pair, window)
         try:
-            response = requests.get(url)
+            response = requests.get(url, verify=False)
             response.raise_for_status()
 
             return BinancePriceResponse(response.json()).priceChangePercent

@@ -23,7 +23,10 @@ from .models import TechnicalAlert, CEXAlert
 
 from telebot import TeleBot, types
 import requests
+import urllib3
 from requests.exceptions import ReadTimeout
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 BaseConfig = LocalUserConfiguration if not USE_MONGO_DB else MongoDBUserConfiguration
 
@@ -775,19 +778,27 @@ class TelegramBot(TeleBot):
 
         return wrapper
 
+   
+            except KeyError:
+                raise ValueError(
+                    f"{pair} is not a valid pair.\n" f"API Response: {response.json()}"
+                )
     def get_latest_binance_price(self, pair):
         try:
             response = requests.get(
                 self.binance_price_endpoint.format(
                     pair.replace("/", ""), BINANCE_TIMEFRAMES[0]
-                )
+                ),
+                verify=False,
             )
-            # response = requests.get(f'https://api.binance.com/api/v3/ticker/price?symbol={pair.replace("/", "")}')
+            response.raise_for_status()
+
             try:
                 return round(float(response.json()["lastPrice"]), 3)
             except KeyError:
                 raise ValueError(
-                    f"{pair} is not a valid pair.\n" f"API Response: {response.json()}"
+                    f"{pair} is not a valid pair.\n"
+                    f"API Response: {response.json()}"
                 )
         except KeyError:
             raise ValueError(
@@ -802,7 +813,6 @@ class TelegramBot(TeleBot):
             raise Exception(
                 f"An unexpected error has occurred when trying to fetch the price of {pair} on Binance - {exc}"
             )
-
     def get_technical_indicator(self, indicator: TechnicalAlert) -> dict:
         # Message should first be parsed, and have the technical indicator returned.
 
