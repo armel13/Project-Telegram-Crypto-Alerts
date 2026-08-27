@@ -1,8 +1,6 @@
 import time
 from datetime import datetime
 import os
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from ..user_configuration import (
     LocalUserConfiguration,
@@ -15,6 +13,7 @@ from ..utils import get_binance_price_url
 from .base import BaseAlertProcess
 from ..telegram import TelegramBot
 from ..models import BinancePriceResponse
+from ..binance_client import fetch_binance_market_data
 
 import requests
 from ratelimit import limits, sleep_and_retry
@@ -58,42 +57,52 @@ class CEXAlertProcess(BaseAlertProcess):
                         pair, alert
                     )
 
-                    if condition:  # If there is a simple alert condition satisfied
+                    if condition:
                         cooldown = alert.get("trigger", {}).get("cooldown_seconds")
                         last_trigger = alert.get("trigger", {}).get("last_triggered", 0)
                         if int(time.time()) > last_trigger + (cooldown or 0):
-                            post_queue.append((post_string, pair))
-
-                        current_time = int(time.time())
-                        alert["trigger"] = {
-                            "cooldown_seconds": cooldown,
-                            "last_triggered": current_time,
-                        }
-                        if not alert["trigger"]["cooldown_seconds"]:
-                            # If the alert has no cooldown setting, remove it
-                            remove_queue.append(alert)
-
-                        do_update = True  # Since the alert needs to be updated in the database, signal do_update
+                            post_queue.append((post_string, pair, alert))
 
             for item in remove_queue:
                 alerts_database[pair].remove(item)
                 if len(alerts_database[pair]) == 0:
                     alerts_database.pop(pair)
 
-        if do_update:
-            configuration.update_alerts(alerts_database)
-
         if len(post_queue) > 0:
             self.polling = False
-            for post, pair in post_queue:
+            for post, pair, alert in post_queue:
                 logger.info(post)
                 status = self.tg_alert(
-                    post=post, channel_ids=config.get("channels") if config.get("channels") else [tg_user_id], pair=pair
+                    post=post,
+                    channel_ids=(
+                        config.get("channels")
+                        if config.get("channels")
+                        else [tg_user_id]
+                    ),
+                    pair=pair,
                 )
+                if len(status[0]) > 0:
+                    alert["trigger"] = {
+                        "cooldown_seconds": alert.get("trigger", {}).get(
+                            "cooldown_seconds"
+                        ),
+                        "last_triggered": int(time.time()),
+                    }
+                    do_update = True
+                    if not alert["trigger"]["cooldown_seconds"]:
+                        try:
+                            alerts_database[pair].remove(alert)
+                            if len(alerts_database[pair]) == 0:
+                                alerts_database.pop(pair)
+                        except (ValueError, KeyError):
+                            pass
                 if len(status[1]) > 0:
                     logger.warn(
                         f"Failed to send Telegram alert ({post}) to the following IDs: {status[1]}"
                     )
+
+        if do_update:
+            configuration.update_alerts(alerts_database)
 
         if not self.polling:
             self.polling = True
@@ -128,7 +137,9 @@ class CEXAlertProcess(BaseAlertProcess):
         # indicator = alert["indicator"]
         comparison = alert["comparison"]
         if pair_price is None:
-            pair_price = self.get_latest_price(token_pair=pair.replace("/", ""))
+            pair_price = float(
+                fetch_binance_market_data(pair.replace("/", ""))["lastPrice"]
+            )
 
         if comparison == "PCTCHG":
             entry = alert["entry"]
@@ -147,8 +158,10 @@ class CEXAlertProcess(BaseAlertProcess):
                     f"{pair} DOWN {pct_chg:.1f}% FROM {entry} AT {pair_price}",
                 )
         elif comparison == "24HRCHG":
-            pct_change = self.get_pct_change(pair.replace("/", ""), window="1d")
-            if abs(pct_change) >= alert["target"]:
+            pct_change = float(
+                fetch_binance_market_data(pair.replace("/", ""))["priceChangePercent"]
+            )
+            if abs(pct_change) / 100 >= alert["target"]:
                 return (
                     True,
                     pct_change,
@@ -162,77 +175,6 @@ class CEXAlertProcess(BaseAlertProcess):
                 return True, pair_price, f"{pair} BELOW {target} TARGET AT {pair_price}"
 
         return False, pair_price, ""
-
-    def get_latest_price(
-        self,
-        token_pair: str,
-        retry_delay: int = 2,
-        maximum_retries: int = 5,
-        _try: int = 1,
-    ) -> float:
-        """
-        Make a request to Binance API and return the response
-
-        :param token_pair: token pair without the slash (e.g. BTCUSDT)
-        :param _try: The current try for recursive retries
-        :param retry_delay: seconds delay between retries
-        :param maximum_retries: Maximum number of retries
-
-        :return float: price of the token pair
-        """
-        url = self.endpoint.format(token_pair, BINANCE_TIMEFRAMES[0])
-        try:
-
-            response = requests.get(url, verify=False)
-            response.raise_for_status()
-
-            return BinancePriceResponse(response.json()).lastPrice
-        except Exception as err:
-            if _try == maximum_retries:
-                raise ConnectionAbortedError(
-                    f"Binance request ({url}) failed after {_try} retries - Error: {err}"
-                )
-            else:
-                time.sleep(retry_delay)
-                return self.get_latest_price(token_pair, _try=_try + 1)
-
-    def get_pct_change(
-        self,
-        token_pair: str,
-        window: str,
-        retry_delay: int = 2,
-        maximum_retries: int = 5,
-        _try: int = 1,
-    ) -> float:
-        """
-        Make a request to Binance API and return the 24 hour % change for a token pair
-
-        :param token_pair: token pair without the slash (e.g. BTCUSDT)
-        :param window: The time window for the price change (e.g. 1d for 1 day)
-        :param _try: The current try for recursive retries
-        :param retry_delay: seconds delay between retries
-        :param maximum_retries: Maxiumum number of retries
-
-        :return float: The percent change of the token pair (expressed as a percentage, i.e. -3.8 for -3.8%)
-        """
-        assert window in BINANCE_TIMEFRAMES, (
-            f"Invalid window ({window}) for Binance API. "
-            f"Must be one of {BINANCE_TIMEFRAMES}"
-        )
-        url = self.endpoint.format(token_pair, window)
-        try:
-            response = requests.get(url, verify=False)
-            response.raise_for_status()
-
-            return BinancePriceResponse(response.json()).priceChangePercent
-        except Exception as err:
-            if _try == maximum_retries:
-                raise ConnectionAbortedError(
-                    f"Binance request ({url}) failed after {_try} retries - Error: {err}"
-                )
-            else:
-                time.sleep(retry_delay)
-                return self.get_pct_change(token_pair, window, _try=_try + 1)
 
     def tg_alert(self, post: str, channel_ids: list[str], pair: str = None) -> tuple:
         """
@@ -267,22 +209,18 @@ class CEXAlertProcess(BaseAlertProcess):
         return output
 
     def run(self):
-        """
-        Start the CEX alert process and run in an infinite loop
-        """
-        try:
-            logger.warn(f"{type(self).__name__} started at {datetime.utcnow()} UTC+0")
-            while True:
+        logger.warn(f"{type(self).__name__} started at {datetime.utcnow()} UTC+0")
+        while True:
+            try:
                 self.poll_all_alerts()
-        except NotImplementedError as exc:
-            logger.critical(exc_info=exc)
-            # self.alert_admins(str(exc))
-        except KeyboardInterrupt:
-            logger.critical("KeyboardInterrupt detected. Exiting...")
-            exit(0)
-        except Exception as exc:
-            logger.critical(
-                "An error has occurred in the CEX alert process. Trying again in 15 seconds...",
-                exc_info=exc,
-            )
-            time.sleep(15)
+            except NotImplementedError as exc:
+                logger.critical(exc_info=exc)
+            except KeyboardInterrupt:
+                logger.critical("KeyboardInterrupt detected. Exiting...")
+                exit(0)
+            except Exception as exc:
+                logger.critical(
+                    f"An error has occurred in the {type(self).__name__} process. Trying again in 15 seconds...",
+                    exc_info=exc,
+                )
+                time.sleep(15)

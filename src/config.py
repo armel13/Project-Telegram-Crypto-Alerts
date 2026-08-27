@@ -1,7 +1,6 @@
 from os import mkdir, getcwd, getenv, listdir
 from os.path import isdir, join, dirname, abspath, isfile, exists
 
-
 """Alert Handler Configuration"""
 CEX_POLLING_PERIOD = 10  # Delay for the CEX alert handler to pull prices and check alert conditions (in seconds)
 TECHNICAL_POLLING_PERIOD = 5  # Delay for the technical alert handler check technical alert conditions (in seconds)
@@ -10,19 +9,14 @@ SIMPLE_INDICATORS = ["PRICE"]
 SIMPLE_INDICATOR_COMPARISONS = ["ABOVE", "BELOW", "PCTCHG", "24HRCHG"]
 
 """Telegram Handler Configuration"""
-PLANS = {
-    "free": 3,
-    "basic": 10,
-    "pro": 30,
-    "white_label": 100
-}
+PLANS = {"free": 3, "basic": 10, "pro": 30, "white_label": 100}
 
 """BINANCE DATA CONFIG"""
 BINANCE_LOCATIONS = ["us", "global"]
-BINANCE_PRICE_URL_GLOBAL = "https://api.binance.com/api/v3/ticker/24hr?symbol={}"
-BINANCE_PRICE_URL_US = (
-    "https://api.binance.us/api/v3/ticker/24hr?symbol={}"
+BINANCE_PRICE_URL_GLOBAL = (
+    "https://data-api.binance.vision/api/v3/ticker/24hr?symbol={}"
 )
+BINANCE_PRICE_URL_US = "https://api.binance.us/api/v3/ticker/24hr?symbol={}"
 BINANCE_TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "12h", "1d", "7d"]
 
 """SWAP DATA CONFIG"""

@@ -50,42 +50,52 @@ class TechnicalAlertProcess(BaseAlertProcess):
                         pair, alert
                     )
 
-                    if condition:  # If there is a technical alert condition satisfied
+                    if condition:
                         cooldown = alert.get("trigger", {}).get("cooldown_seconds")
                         last_trigger = alert.get("trigger", {}).get("last_triggered", 0)
                         if int(time.time()) > last_trigger + (cooldown or 0):
-                            post_queue.append((post_string, pair))
-
-                        current_time = int(time.time())
-                        alert["trigger"] = {
-                            "cooldown_seconds": cooldown,
-                            "last_triggered": current_time,
-                        }
-                        if not alert["trigger"]["cooldown_seconds"]:
-                            # If the alert has no cooldown setting, remove it
-                            remove_queue.append(alert)
-
-                        do_update = True  # Since the alert needs to be updated in the database, signal do_update
+                            post_queue.append((post_string, pair, alert))
 
             for item in remove_queue:
                 alerts_database[pair].remove(item)
                 if len(alerts_database[pair]) == 0:
                     alerts_database.pop(pair)
 
-        if do_update:
-            configuration.update_alerts(alerts_database)
-
         if len(post_queue) > 0:
             self.polling = False
-            for post, pair in post_queue:
+            for post, pair, alert in post_queue:
                 logger.info(post)
                 status = self.tg_alert(
-                    post=post, channel_ids=config.get("channels") if config.get("channels") else [tg_user_id], pair=pair
+                    post=post,
+                    channel_ids=(
+                        config.get("channels")
+                        if config.get("channels")
+                        else [tg_user_id]
+                    ),
+                    pair=pair,
                 )
+                if len(status[0]) > 0:
+                    alert["trigger"] = {
+                        "cooldown_seconds": alert.get("trigger", {}).get(
+                            "cooldown_seconds"
+                        ),
+                        "last_triggered": int(time.time()),
+                    }
+                    do_update = True
+                    if not alert["trigger"]["cooldown_seconds"]:
+                        try:
+                            alerts_database[pair].remove(alert)
+                            if len(alerts_database[pair]) == 0:
+                                alerts_database.pop(pair)
+                        except (ValueError, KeyError):
+                            pass
                 if len(status[1]) > 0:
                     logger.warn(
                         f"Failed to send Telegram alert ({post}) to the following IDs: {status[1]}"
                     )
+
+        if do_update:
+            configuration.update_alerts(alerts_database)
 
         if not self.polling:
             self.polling = True
@@ -206,20 +216,19 @@ class TechnicalAlertProcess(BaseAlertProcess):
         return output
 
     def run(self):
-        try:
-            logger.warn(f"{type(self).__name__} started at {datetime.utcnow()} UTC+0")
-            while True:
+        logger.warn(f"{type(self).__name__} started at {datetime.utcnow()} UTC+0")
+        while True:
+            try:
                 self.poll_all_alerts()
                 time.sleep(TECHNICAL_POLLING_PERIOD)
-        except NotImplementedError as exc:
-            logger.critical(exc_info=exc)
-            # self.alert_admins(str(exc))
-        except KeyboardInterrupt:
-            logger.critical("KeyboardInterrupt detected. Exiting...")
-            exit(0)
-        except Exception as exc:
-            logger.critical(
-                "An error has occurred in the technical alerts process. Trying again in 15 seconds...",
-                exc_info=exc,
-            )
-            time.sleep(15)
+            except NotImplementedError as exc:
+                logger.critical(exc_info=exc)
+            except KeyboardInterrupt:
+                logger.critical("KeyboardInterrupt detected. Exiting...")
+                exit(0)
+            except Exception as exc:
+                logger.critical(
+                    f"An error has occurred in the {type(self).__name__} process. Trying again in 15 seconds...",
+                    exc_info=exc,
+                )
+                time.sleep(15)

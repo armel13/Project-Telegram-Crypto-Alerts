@@ -23,10 +23,9 @@ from .models import TechnicalAlert, CEXAlert
 
 from telebot import TeleBot, types
 import requests
-import urllib3
 from requests.exceptions import ReadTimeout
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from .binance_client import fetch_binance_market_data
 
 BaseConfig = LocalUserConfiguration if not USE_MONGO_DB else MongoDBUserConfiguration
 
@@ -554,20 +553,28 @@ class TelegramBot(TeleBot):
         def on_admin_setplan(message):
             splt_msg = self.split_message(message.text)
             if len(splt_msg) != 2:
-                self.reply_to(message, "Usage: /admin_setplan <USER_ID> <PLAN>\nAvailable plans: free, basic, pro, white_label")
+                self.reply_to(
+                    message,
+                    "Usage: /admin_setplan <USER_ID> <PLAN>\nAvailable plans: free, basic, pro, white_label",
+                )
                 return
 
             target_user = splt_msg[0]
             new_plan = splt_msg[1].lower()
 
             if new_plan not in PLANS:
-                self.reply_to(message, f"Invalid plan. Available plans: {', '.join(PLANS.keys())}")
+                self.reply_to(
+                    message, f"Invalid plan. Available plans: {', '.join(PLANS.keys())}"
+                )
                 return
 
             try:
                 target_config = BaseConfig(target_user)
                 target_config.set_plan(new_plan)
-                self.reply_to(message, f"Successfully updated user {target_user} to plan '{new_plan}'.")
+                self.reply_to(
+                    message,
+                    f"Successfully updated user {target_user} to plan '{new_plan}'.",
+                )
             except Exception as exc:
                 self.reply_to(message, f"Failed to set plan: {exc}")
 
@@ -576,7 +583,10 @@ class TelegramBot(TeleBot):
         def on_setchannel(message):
             splt_msg = self.split_message(message.text)
             if len(splt_msg) != 1:
-                self.reply_to(message, "Usage: /setchannel <CHANNEL_ID>\nTo remove your channel, use /channels REMOVE <CHANNEL_ID>")
+                self.reply_to(
+                    message,
+                    "Usage: /setchannel <CHANNEL_ID>\nTo remove your channel, use /channels REMOVE <CHANNEL_ID>",
+                )
                 return
 
             channel_id = splt_msg[0]
@@ -592,7 +602,10 @@ class TelegramBot(TeleBot):
                 # Here we just set the list to the configured channel.
                 config["channels"] = [channel_id]
                 configuration.update_config(config)
-                self.reply_to(message, f"Successfully set alert destination to {channel_id}.\nYou can verify permissions using /testchannel")
+                self.reply_to(
+                    message,
+                    f"Successfully set alert destination to {channel_id}.\nYou can verify permissions using /testchannel",
+                )
             except Exception as exc:
                 self.reply_to(message, f"An error occurred: {exc}")
 
@@ -608,16 +621,27 @@ class TelegramBot(TeleBot):
             else:
                 channels = configuration.get_channels()
                 if not channels:
-                    self.reply_to(message, "You don't have any channels set. Usage: /testchannel <CHANNEL_ID>")
+                    self.reply_to(
+                        message,
+                        "You don't have any channels set. Usage: /testchannel <CHANNEL_ID>",
+                    )
                     return
                 # use the first one that is not the user_id, or just the first one
                 channel_id = channels[-1]
 
             try:
-                self.send_message(channel_id, "This is a test message from Managed Telegram Crypto Alerts.\n\nPermissions are configured correctly.")
-                self.reply_to(message, f"Test message successfully sent to {channel_id}.")
+                self.send_message(
+                    channel_id,
+                    "This is a test message from Managed Telegram Crypto Alerts.\n\nPermissions are configured correctly.",
+                )
+                self.reply_to(
+                    message, f"Test message successfully sent to {channel_id}."
+                )
             except Exception as exc:
-                self.reply_to(message, f"Failed to send message to {channel_id}.\nMake sure the bot is added as an administrator with posting rights.\nError: {exc}")
+                self.reply_to(
+                    message,
+                    f"Failed to send message to {channel_id}.\nMake sure the bot is added as an administrator with posting rights.\nError: {exc}",
+                )
 
         @self.message_handler(commands=["whitelist"])
         @self.is_admin
@@ -627,7 +651,9 @@ class TelegramBot(TeleBot):
                 if splt_msg[0].lower() == "add":
                     new_users = splt_msg[1].split(",")
                     for user in new_users:
-                        BaseConfig(user).whitelist_user(username=message.from_user.username)
+                        BaseConfig(user).whitelist_user(
+                            username=message.from_user.username
+                        )
                     self.reply_to(message, f"Whitelisted Users: {', '.join(new_users)}")
                 elif splt_msg[0].lower() == "remove":
                     rm_users = splt_msg[1].split(",")
@@ -778,32 +804,14 @@ class TelegramBot(TeleBot):
 
         return wrapper
 
-   
-            except KeyError:
-                raise ValueError(
-                    f"{pair} is not a valid pair.\n" f"API Response: {response.json()}"
-                )
     def get_latest_binance_price(self, pair):
         try:
-            response = requests.get(
-                self.binance_price_endpoint.format(
-                    pair.replace("/", ""), BINANCE_TIMEFRAMES[0]
-                ),
-                verify=False,
-            )
-            response.raise_for_status()
-
-            try:
-                return round(float(response.json()["lastPrice"]), 3)
-            except KeyError:
-                raise ValueError(
-                    f"{pair} is not a valid pair.\n"
-                    f"API Response: {response.json()}"
-                )
-        except KeyError:
+            data = fetch_binance_market_data(pair.replace("/", "").upper())
+            return round(float(data["lastPrice"]), 3)
+        except ValueError as exc:
             raise ValueError(
                 f"{pair} is not a valid pair.\n"
-                f"Please make sure to use this formatting: TOKEN1/TOKEN2"
+                "Please make sure to use this formatting: TOKEN1/TOKEN2"
             )
         except Exception as exc:
             logger.exception(
@@ -813,6 +821,7 @@ class TelegramBot(TeleBot):
             raise Exception(
                 f"An unexpected error has occurred when trying to fetch the price of {pair} on Binance - {exc}"
             )
+
     def get_technical_indicator(self, indicator: TechnicalAlert) -> dict:
         # Message should first be parsed, and have the technical indicator returned.
 
