@@ -27,7 +27,7 @@
       "indicator": "PRICE",
       "comparison": "PCTCHG",
       "entry": 2000,
-      "target": 10.0,
+      "target": 0.10,
       "params": {},
       "trigger": {
         "cooldown_seconds": 300,
