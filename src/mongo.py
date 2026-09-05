@@ -34,6 +34,4 @@ class MongoDBConnection(MongoClient):
 
     def ping(self):
         self.admin.command("ping")
-        print(
-            f"Pinged your deployment. You successfully connected to MongoDB at {self.uri}!"
-        )
+        print("Successfully connected to MongoDB.")

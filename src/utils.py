@@ -1,9 +1,8 @@
-from os import mkdir, getcwd, getenv, listdir
-from os.path import isdir, join, dirname, abspath, isfile, exists
-from dotenv import find_dotenv, load_dotenv
-from functools import wraps
-from ratelimit import limits, sleep_and_retry
 import re
+from os import getcwd, getenv, mkdir
+from os.path import abspath, dirname, isdir, join
+
+from dotenv import find_dotenv, load_dotenv
 
 from .config import *
 
@@ -69,9 +68,7 @@ def get_binance_price_url() -> str:
     ), f"Location must be in {BINANCE_LOCATIONS} for the Binance exchange."
 
     return (
-        BINANCE_PRICE_URL_US
-        if location.lower() == "us"
-        else BINANCE_PRICE_URL_GLOBAL
+        BINANCE_PRICE_URL_US if location.lower() == "us" else BINANCE_PRICE_URL_GLOBAL
     )
 
 
