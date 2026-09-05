@@ -78,6 +78,8 @@ If you are looking for a completely hands-off setup, we offer managed hosting, m
 
 Key additions for the managed service:
 - **User Plans:** tiered active alert limits (free: 3, basic: 10, pro: 30, white_label: 100).
+- **Quota Enforcement:** only alerts within the user's current plan quota are evaluated and delivered.
+- **Safe Onboarding:** new users start with an empty alert list and create only the alerts they need.
 - **Client Management:** `/myplan`, `/setchannel`, and `/testchannel` commands to manage where alerts go.
 - **Admin Control:** `/admin_setplan` to manage client subscriptions.
 
@@ -126,9 +128,9 @@ If you have advanced technical abilities and would like to self host the bot, yo
    | TARGET               | The target % change or price value for the alert, depending on comparison type. (Use percentage pts for %, e.g. 10.5 for 10.5%).                     |
    | optional_COOLDOWN    | The alert cooldown in (e.g., 30s, 5m, 1h). Default behavior is a _one-time trigger_ (no cooldown). |
 
-   _For example, the following command sets an alert for when the price of BTC/USDT changes by 10% relative to an entry price of 1200, and keeps triggering every 1 hour until deleted if it is above 1200:_
+   _For example, the following command sets an alert for when BTC/USDT changes by 10% relative to its market price when the alert is created, and allows it to trigger again after a one-hour cooldown:_
 
-   `/new_alert BTC/USDT PRICE PCTCHG 10.0 1200 1h`
+   `/new_alert BTC/USDT PRICE PCTCHG 10.0 1h`
 
    ___
 

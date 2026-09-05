@@ -100,7 +100,7 @@ class TADatabaseClient:
             raise ValueError(f"'{_id}' is an invalid indicator ID")
 
     def validate_indicator(
-        self, indicator: str, args: list = None
+        self, indicator: str, args: str | list[str] | None = None
     ) -> Union[dict, None]:
         """
         :param indicator: The uppercase indicator symbol
@@ -115,10 +115,18 @@ class TADatabaseClient:
             return None
 
         if args is not None:
-            params = [param[0] for param in indicator["params"]]
-            output_vals = [val[0] for val in indicator["output"]]
-            if not any(arg in params or arg in output_vals for arg in args):
-                return None
+            arguments = args.split(",") if isinstance(args, str) else args
+            params = {param[0] for param in indicator["params"]}
+            output_vals = set(indicator["output"])
+            for argument in arguments:
+                if "=" not in argument:
+                    return None
+                name, value = argument.split("=", 1)
+                if name == "output":
+                    if value not in output_vals:
+                        return None
+                elif name not in params:
+                    return None
 
         return indicator
 
@@ -272,13 +280,34 @@ class TaapiioProcess:
 
         Free API key limit is 1 call every 15 seconds, we use +1 to add a safety buffer
         """
-        if r_type == "GET":
-            return requests.get(
-                endpoint.format(api_key=self.apikey), params=params
-            ).json()
-        elif r_type == "POST":
-            logger.info(f"Sending bulk query to API: {params}")
-            return requests.post(endpoint, json=params).json()
+        try:
+            if r_type == "GET":
+                safe_endpoint = endpoint.split("?", 1)[0]
+                request_params = {
+                    "secret": self.apikey,
+                    "exchange": DEFAULT_EXCHANGE,
+                    **params,
+                }
+                response = requests.get(
+                    safe_endpoint, params=request_params, timeout=15
+                )
+            elif r_type == "POST":
+                logger.info("Sending Taapi.io bulk query")
+                response = requests.post(endpoint, json=params, timeout=15)
+            else:
+                raise ValueError(f"Unsupported request type: {r_type}")
+
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, dict):
+                raise ValueError("Taapi.io returned an unexpected response format")
+            return data
+        except requests.RequestException as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            detail = f" (HTTP {status})" if status is not None else ""
+            raise ConnectionError(f"Taapi.io request failed{detail}") from None
+        except requests.JSONDecodeError:
+            raise ConnectionError("Taapi.io returned invalid JSON") from None
 
     def mainloop(self):
         """
@@ -286,7 +315,7 @@ class TaapiioProcess:
 
         Exceptions should be handled at a higher level than this function
         """
-        logger.warn("Taapi.io process started.")
+        logger.warning("Taapi.io process started.")
         previous_rates = (
             []
         )  # Store the last 5 values for process time to fetch and update all values in the aggregate
@@ -327,9 +356,9 @@ class TaapiioProcess:
                     try:
                         responses = r["data"]
                     except KeyError:
-                        # if "error" in r.keys():
-                        #     logger.warn(f"Taapio error occurred when building aggregate: {r['error']}")
-                        raise Exception(f"Error occurred calling taapi.io API - {r}")
+                        raise ValueError(
+                            "Taapi.io response did not contain the expected data"
+                        ) from None
 
                     # Assign returned values and update aggregate:
                     for i, response in enumerate(responses):
@@ -357,7 +386,7 @@ class TaapiioProcess:
 
     def alert_admins(self, message: str) -> None:
         if self.tg_bot_token is None:
-            logger.warn(
+            logger.warning(
                 f"Attempted to alert admins, but no telegram bot token was set: {message}"
             )
             return None
@@ -370,25 +399,32 @@ class TaapiioProcess:
             )
 
             if admin:
-                requests.post(
-                    url=f"https://api.telegram.org/bot{self.tg_bot_token}/sendMessage",
-                    params={"chat_id": user, "text": message},
-                )
+                try:
+                    response = requests.post(
+                        url=f"https://api.telegram.org/bot{self.tg_bot_token}/sendMessage",
+                        params={"chat_id": user, "text": message},
+                        timeout=15,
+                    )
+                    response.raise_for_status()
+                except requests.RequestException:
+                    logger.warning(
+                        "Failed to deliver a Taapi.io process error to admin %s", user
+                    )
 
     def run(self) -> None:
         restart_period = 15
-        try:
-            self.mainloop()
-        except KeyboardInterrupt:
-            return
-        except Exception as exc:
-            logger.critical(
-                f"An error has occurred in the mainloop - restarting in 5 seconds...",
-                exc_info=exc,
-            )
-            self.alert_admins(
-                message=f"A critical error has occurred in the TaapiioProcess "
-                f"(Restarting in {restart_period} seconds) - {exc}"
-            )
-            sleep(restart_period)
-            return self.run()
+        while True:
+            try:
+                self.mainloop()
+            except KeyboardInterrupt:
+                return
+            except Exception as exc:
+                logger.critical(
+                    "An error occurred in the Taapi.io mainloop; restarting",
+                    exc_info=exc,
+                )
+                self.alert_admins(
+                    message="A critical error occurred in the Taapi.io process. "
+                    f"Restarting in {restart_period} seconds."
+                )
+                sleep(restart_period)

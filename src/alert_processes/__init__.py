@@ -3,6 +3,8 @@ from .base import BaseAlertProcess
 from .cex import CEXAlertProcess
 from .technical import TechnicalAlertProcess
 
+__all__ = ["BaseAlertProcess", "CEXAlertProcess", "TechnicalAlertProcess"]
+
 
 """
 EACH OF THE PROCESSES IN THIS MODULE CONTROLS A DIFFERENT TYPE OF ALERT.

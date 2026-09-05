@@ -1,0 +1,35 @@
+name: Python quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Compile
+        run: python -m compileall -q src
+      - name: Test
+        run: python -m pytest -q
+      - name: Check formatting
+        run: python -m black --check src tests
+      - name: Check critical lint rules
+        run: python -m ruff check --select E9,F401,F63,F7,F82 src tests
+      - name: Check insecure TLS overrides
+        run: |
+          if grep -R -n -E 'verify[[:space:]]*=[[:space:]]*False|disable_warnings' src; then
+            echo "Insecure TLS override found"
+            exit 1
+          fi
