@@ -1,5 +1,4 @@
-from os import mkdir, getcwd, getenv, listdir
-from os.path import isdir, join, dirname, abspath, isfile, exists
+from os.path import abspath, dirname, join
 
 """Alert Handler Configuration"""
 CEX_POLLING_PERIOD = 10  # Delay for the CEX alert handler to pull prices and check alert conditions (in seconds)

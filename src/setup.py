@@ -1,5 +1,4 @@
 import os
-import json
 
 from .user_configuration import LocalUserConfiguration, MongoDBUserConfiguration
 from .logger import logger

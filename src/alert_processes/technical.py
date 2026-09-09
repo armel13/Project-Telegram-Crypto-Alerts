@@ -1,13 +1,12 @@
 import time
-from datetime import datetime
-import os
-from functools import wraps
-
+from datetime import datetime, timezone
+from ..access_control import get_effective_alert_limit, iter_eligible_alerts
 from .base import BaseAlertProcess
 from ..user_configuration import (
     LocalUserConfiguration,
     MongoDBUserConfiguration,
     get_whitelist,
+    synchronized_user_data,
 )
 from ..logger import logger
 from ..config import *
@@ -22,6 +21,7 @@ class TechnicalAlertProcess(BaseAlertProcess):
         self.ta_db = TADatabaseClient().fetch_ref()
         self.ta_agg_cli = TAAggregateClient()
 
+    @synchronized_user_data
     def poll_user_alerts(self, tg_user_id: str) -> None:
         """
         1. Load the user's configuration
@@ -38,13 +38,21 @@ class TechnicalAlertProcess(BaseAlertProcess):
         )
         alerts_database = configuration.load_alerts()
         config = configuration.load_config()
+        eligible_alerts = {
+            (pair, index)
+            for pair, index, _ in iter_eligible_alerts(
+                alerts_database, get_effective_alert_limit(config)
+            )
+        }
 
         do_update = False  # If any changes are made, update the database
         post_queue = []
         for pair in alerts_database.copy().keys():
 
             remove_queue = []
-            for alert in alerts_database[pair]:
+            for index, alert in enumerate(alerts_database[pair]):
+                if (pair, index) not in eligible_alerts:
+                    continue
                 if alert["type"] == "t":
                     condition, value, post_string = self.get_technical_indicator(
                         pair, alert
@@ -90,7 +98,7 @@ class TechnicalAlertProcess(BaseAlertProcess):
                         except (ValueError, KeyError):
                             pass
                 if len(status[1]) > 0:
-                    logger.warn(
+                    logger.warning(
                         f"Failed to send Telegram alert ({post}) to the following IDs: {status[1]}"
                     )
 
@@ -99,7 +107,7 @@ class TechnicalAlertProcess(BaseAlertProcess):
 
         if not self.polling:
             self.polling = True
-            logger.info(f"Bot polling for next alert...")
+            logger.info("Bot polling for next alert...")
 
     def poll_all_alerts(self) -> None:
         """
@@ -210,13 +218,20 @@ class TechnicalAlertProcess(BaseAlertProcess):
                     disable_web_page_preview=True,
                 )
                 output[0].append(g_id)
-            except:
+            except Exception as exc:
+                logger.warning(
+                    "Failed to send a technical alert to Telegram destination %s: %s",
+                    g_id,
+                    type(exc).__name__,
+                )
                 output[1].append(g_id)
 
         return output
 
     def run(self):
-        logger.warn(f"{type(self).__name__} started at {datetime.utcnow()} UTC+0")
+        logger.warning(
+            "%s started at %s", type(self).__name__, datetime.now(timezone.utc)
+        )
         while True:
             try:
                 self.poll_all_alerts()
@@ -225,7 +240,7 @@ class TechnicalAlertProcess(BaseAlertProcess):
                 logger.critical(exc_info=exc)
             except KeyboardInterrupt:
                 logger.critical("KeyboardInterrupt detected. Exiting...")
-                exit(0)
+                return
             except Exception as exc:
                 logger.critical(
                     f"An error has occurred in the {type(self).__name__} process. Trying again in 15 seconds...",

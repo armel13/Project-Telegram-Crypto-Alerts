@@ -98,5 +98,5 @@ Alternatively, follow the steps below to set it up on your local machine.
    py -m src
 
    # Mac/Linux:
-   python3 -m bot
+   python3 -m src
    ```

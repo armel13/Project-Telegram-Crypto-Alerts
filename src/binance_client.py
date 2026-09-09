@@ -1,5 +1,7 @@
+import time
+
 import requests
-import json
+
 from .utils import get_binance_price_url
 
 
@@ -53,7 +55,5 @@ def fetch_binance_market_data(
                 raise ConnectionAbortedError(
                     f"Binance request ({url}) failed after {attempt} retries. Last error: {str(e)}"
                 )
-            import time
-
             time.sleep(retry_delay)
     raise ConnectionAbortedError(f"Binance request ({url}) failed.")

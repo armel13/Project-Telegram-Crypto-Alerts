@@ -1,21 +1,18 @@
 import time
-from datetime import datetime
-import os
-
+from datetime import datetime, timezone
+from ..access_control import get_effective_alert_limit, iter_eligible_alerts
+from ..binance_client import fetch_binance_market_data
 from ..user_configuration import (
     LocalUserConfiguration,
     MongoDBUserConfiguration,
     get_whitelist,
+    synchronized_user_data,
 )
 from ..logger import logger
 from ..config import *
 from ..utils import get_binance_price_url
 from .base import BaseAlertProcess
 from ..telegram import TelegramBot
-from ..models import BinancePriceResponse
-from ..binance_client import fetch_binance_market_data
-
-import requests
 from ratelimit import limits, sleep_and_retry
 
 
@@ -29,6 +26,7 @@ class CEXAlertProcess(BaseAlertProcess):
 
         self.endpoint = get_binance_price_url()
 
+    @synchronized_user_data
     def poll_user_alerts(self, tg_user_id: str) -> None:
         """
         1. Load the user's configuration
@@ -45,13 +43,21 @@ class CEXAlertProcess(BaseAlertProcess):
         )
         alerts_database = configuration.load_alerts()
         config = configuration.load_config()
+        eligible_alerts = {
+            (pair, index)
+            for pair, index, _ in iter_eligible_alerts(
+                alerts_database, get_effective_alert_limit(config)
+            )
+        }
 
         do_update = False  # If any changes are made, update the database
         post_queue = []
         for pair in alerts_database.copy().keys():
 
             remove_queue = []
-            for alert in alerts_database[pair]:
+            for index, alert in enumerate(alerts_database[pair]):
+                if (pair, index) not in eligible_alerts:
+                    continue
                 if alert["type"] == "s":
                     condition, value, post_string = self.get_simple_indicator(
                         pair, alert
@@ -97,7 +103,7 @@ class CEXAlertProcess(BaseAlertProcess):
                         except (ValueError, KeyError):
                             pass
                 if len(status[1]) > 0:
-                    logger.warn(
+                    logger.warning(
                         f"Failed to send Telegram alert ({post}) to the following IDs: {status[1]}"
                     )
 
@@ -106,7 +112,7 @@ class CEXAlertProcess(BaseAlertProcess):
 
         if not self.polling:
             self.polling = True
-            logger.info(f"Bot polling for next alert...")
+            logger.info("Bot polling for next alert...")
 
     @sleep_and_retry
     @limits(calls=1, period=CEX_POLLING_PERIOD)
@@ -203,13 +209,20 @@ class CEXAlertProcess(BaseAlertProcess):
                     disable_web_page_preview=True,
                 )
                 output[0].append(g_id)
-            except:
+            except Exception as exc:
+                logger.warning(
+                    "Failed to send a CEX alert to Telegram destination %s: %s",
+                    g_id,
+                    type(exc).__name__,
+                )
                 output[1].append(g_id)
 
         return output
 
     def run(self):
-        logger.warn(f"{type(self).__name__} started at {datetime.utcnow()} UTC+0")
+        logger.warning(
+            "%s started at %s", type(self).__name__, datetime.now(timezone.utc)
+        )
         while True:
             try:
                 self.poll_all_alerts()
@@ -217,7 +230,7 @@ class CEXAlertProcess(BaseAlertProcess):
                 logger.critical(exc_info=exc)
             except KeyboardInterrupt:
                 logger.critical("KeyboardInterrupt detected. Exiting...")
-                exit(0)
+                return
             except Exception as exc:
                 logger.critical(
                     f"An error has occurred in the {type(self).__name__} process. Trying again in 15 seconds...",

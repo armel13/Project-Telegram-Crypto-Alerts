@@ -1,9 +1,71 @@
 import json
+import os
 import shutil
+import tempfile
+from contextlib import contextmanager
+from functools import wraps
+from threading import RLock
 
 from .config import *
 from .config import PLANS
 from .mongo import MongoDBConnection
+
+_USER_DATA_LOCKS: dict[str, RLock] = {}
+_USER_DATA_LOCKS_GUARD = RLock()
+
+
+def _get_user_data_lock(user_id: str) -> RLock:
+    """Return the process-wide lock shared by all config objects for a user."""
+    with _USER_DATA_LOCKS_GUARD:
+        return _USER_DATA_LOCKS.setdefault(str(user_id), RLock())
+
+
+@contextmanager
+def user_data_lock(user_id: str):
+    """Prevent Telegram and alert-worker threads mutating one user concurrently."""
+    with _get_user_data_lock(user_id):
+        yield
+
+
+def synchronized_user_data(func):
+    """Serialize a worker method whose first argument after self is a user ID."""
+
+    @wraps(func)
+    def wrapper(self, tg_user_id: str, *args, **kwargs):
+        with user_data_lock(tg_user_id):
+            return func(self, tg_user_id, *args, **kwargs)
+
+    return wrapper
+
+
+def synchronized_message_user_data(func):
+    """Serialize a Telegram handler that mutates the caller's stored data."""
+
+    @wraps(func)
+    def wrapper(message, *args, **kwargs):
+        with user_data_lock(str(message.from_user.id)):
+            return func(message, *args, **kwargs)
+
+    return wrapper
+
+
+def _atomic_write_json(path: str, data: dict) -> None:
+    """Durably replace a JSON file without exposing readers to partial content."""
+    directory = os.path.dirname(path)
+    fd, temporary_path = tempfile.mkstemp(prefix=".tmp-", dir=directory, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as outfile:
+            json.dump(data, outfile, indent=2)
+            outfile.flush()
+            os.fsync(outfile.fileno())
+        os.replace(temporary_path, path)
+    except Exception:
+        try:
+            os.unlink(temporary_path)
+        except FileNotFoundError:
+            pass
+        raise
+
 
 # Activate mongo DB connection if needed
 if USE_MONGO_DB:
@@ -28,66 +90,66 @@ class LocalUserConfiguration:
 
     def whitelist_user(self, is_admin: bool = False, username: str = None):
         """Add necessary files and directories to database for TG user ID"""
+        with user_data_lock(self.user_id):
+            if self.user_id in get_whitelist():
+                return
 
-        # Return if user data directory already exists
-        if self.user_id in get_whitelist():
-            return
+            mkdir(self.user_config_root)
 
-        # Make root dir
-        mkdir(self.user_config_root)
+            try:
+                from datetime import datetime, timezone
 
-        try:
-            from datetime import datetime
+                with open(self.default_config_path, "r", encoding="utf-8") as _in:
+                    default_config = json.load(_in)
 
-            # Make default configuration:
-            with open(self.default_config_path, "r") as _in:
-                default_config = json.loads(_in.read())
+                default_config["channels"].append(self.user_id)
+                if is_admin:
+                    default_config["is_admin"] = True
 
-            # Add user properties
-            default_config["channels"].append(self.user_id)
-            if is_admin:
-                default_config["is_admin"] = True
+                now = datetime.now(timezone.utc).isoformat()
+                default_config["telegram_id"] = self.user_id
+                if username:
+                    default_config["username"] = username
+                default_config["plan"] = "free"
+                default_config["max_alerts"] = PLANS.get("free", 3)
+                default_config["created_at"] = now
+                default_config["updated_at"] = now
+                default_config["plan_start"] = None
+                default_config["plan_expiration"] = None
+                default_config["reminder_state"] = {}
+                _atomic_write_json(self.config_path, default_config)
 
-            default_config["telegram_id"] = self.user_id
-            if username:
-                default_config["username"] = username
-            default_config["plan"] = "free"
-            default_config["max_alerts"] = PLANS.get("free", 3)
-            default_config["created_at"] = datetime.utcnow().isoformat()
-            default_config["updated_at"] = datetime.utcnow().isoformat()
-            with open(self.config_path, "w") as _out:
-                _out.write(json.dumps(default_config, indent=2))
-
-            # Make default alerts configuration
-            shutil.copy(self.default_alerts_path, self.alerts_path)
-        except Exception as exc:
-            self.blacklist_user()
-            raise exc
+                with open(self.default_alerts_path, "r", encoding="utf-8") as _in:
+                    _atomic_write_json(self.alerts_path, json.load(_in))
+            except Exception:
+                shutil.rmtree(self.user_config_root, ignore_errors=True)
+                raise
 
     def blacklist_user(self):
         """Remove TG user configuration from database"""
         # Removes user configuration recursively
-        if exists(self.user_config_root):
-            shutil.rmtree(self.user_config_root)
+        with user_data_lock(self.user_id):
+            if exists(self.user_config_root):
+                shutil.rmtree(self.user_config_root)
 
     def load_alerts(self) -> dict:
         """Load the database contents and return it in JSON format"""
-        with open(self.alerts_path, "r") as infile:
-            contents = infile.read()
-            return json.loads(contents)
+        with user_data_lock(self.user_id):
+            with open(self.alerts_path, "r", encoding="utf-8") as infile:
+                return json.load(infile)
 
     def update_alerts(self, data: dict) -> None:
-        with open(self.alerts_path, "w") as outfile:
-            outfile.write(json.dumps(data, indent=2))
+        with user_data_lock(self.user_id):
+            _atomic_write_json(self.alerts_path, data)
 
     def load_config(self) -> dict:
-        with open(self.config_path, "r") as infile:
-            contents = infile.read()
-            return json.loads(contents)
+        with user_data_lock(self.user_id):
+            with open(self.config_path, "r", encoding="utf-8") as infile:
+                return json.load(infile)
 
     def update_config(self, data: dict) -> None:
-        with open(self.config_path, "w") as outfile:
-            outfile.write(json.dumps(data, indent=2))
+        with user_data_lock(self.user_id):
+            _atomic_write_json(self.config_path, data)
 
     def admin_status(self, new_value: bool = None) -> bool:
         config = self.load_config()
@@ -103,10 +165,124 @@ class LocalUserConfiguration:
     def set_plan(self, plan: str) -> None:
         config = self.load_config()
         from datetime import datetime
+
         config["plan"] = plan
         config["max_alerts"] = PLANS.get(plan, 3)
         config["updated_at"] = datetime.utcnow().isoformat()
         self.update_config(config)
+
+    def activate_plan(
+        self, plan: str, days: int, command_text: str, message_id: int
+    ) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        config = self.load_config()
+
+        # Replay protection
+        processed_commands = config.get("processed_commands", {})
+        if (
+            str(message_id) in processed_commands
+            and processed_commands[str(message_id)] == command_text
+        ):
+            raise Exception(
+                "This activation command has already been processed (replay protection)."
+            )
+
+        now = datetime.now(timezone.utc)
+        current_plan = config.get("plan", "free")
+        current_expiration_str = config.get("plan_expiration")
+
+        new_expiration = now + timedelta(days=days)
+
+        if current_plan == plan and current_expiration_str:
+            try:
+                current_expiration = datetime.fromisoformat(current_expiration_str)
+                if current_expiration.tzinfo is None:
+                    current_expiration = current_expiration.replace(tzinfo=timezone.utc)
+                if current_expiration > now:
+                    new_expiration = current_expiration + timedelta(days=days)
+            except ValueError:
+                pass
+
+        config["plan"] = plan
+        config["max_alerts"] = PLANS.get(plan, 3)
+        config["plan_start"] = now.isoformat()
+        config["plan_expiration"] = new_expiration.isoformat()
+        config["updated_at"] = now.isoformat()
+        config["reminder_state"] = {}  # Reset reminders
+
+        # Save replay protection state
+        processed_commands[str(message_id)] = command_text
+        # Keep dict small
+        if len(processed_commands) > 100:
+            keys_to_remove = list(processed_commands.keys())[:-100]
+            for k in keys_to_remove:
+                del processed_commands[k]
+        config["processed_commands"] = processed_commands
+
+        self.update_config(config)
+
+    def check_subscription_reminders(self, bot) -> None:
+        from datetime import datetime, timezone
+
+        config = self.load_config()
+        plan = config.get("plan", "free")
+        expiration_str = config.get("plan_expiration")
+
+        if plan == "free" or not expiration_str:
+            return
+
+        try:
+            expiration = datetime.fromisoformat(expiration_str)
+            if expiration.tzinfo is None:
+                expiration = expiration.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return
+
+        now = datetime.now(timezone.utc)
+        time_left = expiration - now
+        days_left = time_left.days
+
+        reminder_state = config.get("reminder_state", {})
+
+        # 3-day reminder
+        if 2 <= days_left <= 3 and not reminder_state.get("3_day"):
+            try:
+                bot.send_message(
+                    self.user_id,
+                    f"Your '{plan}' subscription will expire in {days_left} days. Use /renew to extend your plan.",
+                )
+                reminder_state["3_day"] = True
+                config["reminder_state"] = reminder_state
+                self.update_config(config)
+            except Exception:
+                pass
+
+        # 1-day reminder
+        elif 0 <= days_left <= 1 and not reminder_state.get("1_day"):
+            try:
+                bot.send_message(
+                    self.user_id,
+                    f"Your '{plan}' subscription will expire in {days_left} days (or less). Use /renew to extend your plan.",
+                )
+                reminder_state["1_day"] = True
+                config["reminder_state"] = reminder_state
+                self.update_config(config)
+            except Exception:
+                pass
+
+        # Expired reminder
+        elif days_left < 0 and not reminder_state.get("expired"):
+            try:
+                bot.send_message(
+                    self.user_id,
+                    f"Your '{plan}' subscription has expired. You have been switched to the 'free' plan. Use /renew to upgrade again.",
+                )
+                reminder_state["expired"] = True
+                config["reminder_state"] = reminder_state
+                self.update_config(config)
+            except Exception:
+                pass
 
     def get_channels(self) -> list[str]:
         return self.load_config().get("channels", [])
@@ -172,6 +348,9 @@ class MongoDBUserConfiguration(LocalUserConfiguration):
             default_config["max_alerts"] = PLANS.get("free", 3)
             default_config["created_at"] = datetime.utcnow().isoformat()
             default_config["updated_at"] = datetime.utcnow().isoformat()
+            default_config["plan_start"] = None
+            default_config["plan_expiration"] = None
+            default_config["reminder_state"] = {}
 
             user_document["config"] = default_config
 
@@ -227,8 +406,6 @@ class MongoDBUserConfiguration(LocalUserConfiguration):
             self.filter, {"$set": {"config": data}}, upsert=True
         )
 
-
-
     def get_plan(self) -> str:
         """OVERRIDES SUPER - Get the plan from the user document"""
         config = self.load_config()
@@ -238,9 +415,61 @@ class MongoDBUserConfiguration(LocalUserConfiguration):
         """OVERRIDES SUPER - Set the plan in the user document"""
         config = self.load_config()
         from datetime import datetime
+
         config["plan"] = plan
         config["max_alerts"] = PLANS.get(plan, 3)
         config["updated_at"] = datetime.utcnow().isoformat()
+        self.update_config(config)
+
+    def activate_plan(
+        self, plan: str, days: int, command_text: str, message_id: int
+    ) -> None:
+        """OVERRIDES SUPER - Activate plan in the user document"""
+        from datetime import datetime, timedelta, timezone
+
+        config = self.load_config()
+
+        # Replay protection
+        processed_commands = config.get("processed_commands", {})
+        if (
+            str(message_id) in processed_commands
+            and processed_commands[str(message_id)] == command_text
+        ):
+            raise Exception(
+                "This activation command has already been processed (replay protection)."
+            )
+
+        now = datetime.now(timezone.utc)
+        current_plan = config.get("plan", "free")
+        current_expiration_str = config.get("plan_expiration")
+
+        new_expiration = now + timedelta(days=days)
+
+        if current_plan == plan and current_expiration_str:
+            try:
+                current_expiration = datetime.fromisoformat(current_expiration_str)
+                if current_expiration.tzinfo is None:
+                    current_expiration = current_expiration.replace(tzinfo=timezone.utc)
+                if current_expiration > now:
+                    new_expiration = current_expiration + timedelta(days=days)
+            except ValueError:
+                pass
+
+        config["plan"] = plan
+        config["max_alerts"] = PLANS.get(plan, 3)
+        config["plan_start"] = now.isoformat()
+        config["plan_expiration"] = new_expiration.isoformat()
+        config["updated_at"] = now.isoformat()
+        config["reminder_state"] = {}  # Reset reminders
+
+        # Save replay protection state
+        processed_commands[str(message_id)] = command_text
+        if len(processed_commands) > 100:
+            keys_to_remove = list(processed_commands.keys())[:-100]
+            for k in keys_to_remove:
+                del processed_commands[k]
+        config["processed_commands"] = processed_commands
+
         self.update_config(config)
 
 

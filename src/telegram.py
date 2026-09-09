@@ -1,13 +1,12 @@
 import time
 from datetime import datetime
 from typing import Union
-from os import getenv
-
 from .logger import logger
 from .user_configuration import (
     LocalUserConfiguration,
     MongoDBUserConfiguration,
     get_whitelist,
+    synchronized_message_user_data,
 )
 from .utils import (
     get_logfile,
@@ -22,12 +21,20 @@ from .indicators import TADatabaseClient, TaapiioProcess
 from .models import TechnicalAlert, CEXAlert
 
 from telebot import TeleBot, types
-import requests
 from requests.exceptions import ReadTimeout
 
 from .binance_client import fetch_binance_market_data
 
 BaseConfig = LocalUserConfiguration if not USE_MONGO_DB else MongoDBUserConfiguration
+
+
+def parse_technical_alert_arguments(parts: list[str]) -> tuple[list[str], str | None]:
+    """Validate technical-alert arity and separate its optional cooldown."""
+    if len(parts) not in (7, 8):
+        raise ValueError(
+            "Technical alerts require 7 arguments plus an optional cooldown."
+        )
+    return parts[:7], parts[7] if len(parts) == 8 else None
 
 
 class TelegramBot(TeleBot):
@@ -76,9 +83,10 @@ class TelegramBot(TeleBot):
 
         @self.message_handler(commands=["new_alert", "newalert"])
         @self.is_whitelisted
+        @synchronized_message_user_data
         def on_new_alert(message):
             """/new_alert PAIR/PAIR INDICATOR TARGET optional_COOLDOWN"""
-            simple_indicators = ["PRICE", "24HRCHG"]
+            simple_indicators = ["PRICE"]
             technical_indicators = list(self.indicators_db.keys())
             try:
                 msg = self.split_message(message.text)
@@ -105,6 +113,8 @@ class TelegramBot(TeleBot):
                     )
 
                     # Verify accurate formatting:
+                    technical_args, _ = parse_technical_alert_arguments(msg)
+
                     (
                         pair,
                         indicator,
@@ -113,7 +123,7 @@ class TelegramBot(TeleBot):
                         output_value,
                         comparison,
                         target,
-                    ) = msg
+                    ) = technical_args
 
                     # Verify indicator:
                     indicator_instance = self.parse_technical_indicator_message(
@@ -240,6 +250,7 @@ class TelegramBot(TeleBot):
 
         @self.message_handler(commands=["cancel_alert", "cancelalert"])
         @self.is_whitelisted
+        @synchronized_message_user_data
         def on_cancel_alert(message):
             """/cancel_alert PAIR/PAIR alert_index"""
             try:
@@ -371,12 +382,12 @@ class TelegramBot(TeleBot):
         @self.is_whitelisted
         def on_price_all(message):
             """/price_all - Gets the price of all tokens with alerts set"""
-            configuration = BaseConfig(str(message.from_user.id))
-            tokens = [
-                f'{key}: {self.get_latest_binance_price(key.replace("/", "").upper())}'
-                for key in configuration.load_alerts().keys()
-            ]
             try:
+                configuration = BaseConfig(str(message.from_user.id))
+                tokens = [
+                    f'{key}: {self.get_latest_binance_price(key.replace("/", "").upper())}'
+                    for key in configuration.load_alerts()
+                ]
                 self.reply_to(message, "\n".join(tokens))
             except Exception as exc:
                 self.reply_to(message, f"Error: {str(exc)}")
@@ -681,7 +692,8 @@ class TelegramBot(TeleBot):
             """Returns the program's logs at logs/logs.txt"""
             try:
                 with open(get_logfile(), "rb") as logfile:
-                    if len(logfile.read()) > 0:
+                    if logfile.read(1):
+                        logfile.seek(0)
                         self.reply_to(message, "Fetching logs...")
                         try:
                             self.send_document(message.chat.id, logfile)
@@ -703,20 +715,20 @@ class TelegramBot(TeleBot):
                 whitelist = get_whitelist()
                 if splt_msg[0].lower() == "add":
                     new_admins = splt_msg[1].split(",")
+                    successful_admins = []
                     failure_msgs = []
-                    for i, new_admin in enumerate(new_admins):
+                    for new_admin in new_admins:
                         try:
                             if new_admin in whitelist:
                                 BaseConfig(new_admin).admin_status(new_value=True)
+                                successful_admins.append(new_admin)
                             else:
                                 failure_msgs.append(
-                                    f"{new_admins.pop(i)} - User is not yet whitelisted"
+                                    f"{new_admin} - User is not yet whitelisted"
                                 )
                         except Exception as exc:
-                            failure_msgs.append(f"{new_admins.pop(i)} - {exc}")
-                    msg = (
-                        f"Successfully added administrator(s): {', '.join(new_admins)}"
-                    )
+                            failure_msgs.append(f"{new_admin} - {exc}")
+                    msg = f"Successfully added administrator(s): {', '.join(successful_admins)}"
                     if len(failure_msgs) > 0:
                         msg += "\n\nFailed to add administrator(s):"
                         for fail_msg in failure_msgs:
@@ -724,20 +736,20 @@ class TelegramBot(TeleBot):
                     self.reply_to(message, msg)
                 elif splt_msg[0].lower() == "remove":
                     rm_admins = splt_msg[1].split(",")
+                    successful_removals = []
                     failure_msgs = []
-                    for i, admin in enumerate(rm_admins):
+                    for admin in rm_admins:
                         try:
                             if admin in whitelist:
                                 BaseConfig(admin).admin_status(new_value=False)
+                                successful_removals.append(admin)
                             else:
                                 failure_msgs.append(
-                                    f"{rm_admins.pop(i)} - User is not yet whitelisted"
+                                    f"{admin} - User is not yet whitelisted"
                                 )
                         except Exception as exc:
-                            failure_msgs.append(f"{rm_admins.pop(i)} - {exc}")
-                    msg = (
-                        f"Successfully revoked administrator(s): {', '.join(rm_admins)}"
-                    )
+                            failure_msgs.append(f"{admin} - {exc}")
+                    msg = f"Successfully revoked administrator(s): {', '.join(successful_removals)}"
                     if len(failure_msgs) > 0:
                         msg += "\n\nFailed to revoke administrator(s):"
                         for fail_msg in failure_msgs:
@@ -831,7 +843,7 @@ class TelegramBot(TeleBot):
         params["interval"] = indicator.interval
 
         # Call the taapi.io API to get the indicator values:
-        endpoint = indicator.endpoint.format(api_key=self.taapiio_cli.apikey)
+        endpoint = indicator.endpoint
         r = self.taapiio_cli.call_api(endpoint, params, "GET")
         try:
             return {output_val: r[output_val] for output_val in indicator.output_vals}
