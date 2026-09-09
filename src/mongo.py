@@ -14,17 +14,17 @@ class MongoDBConnection(MongoClient):
         cxn_string = getenv("MONGODB_CONNECTION_STRING")
         if cxn_string is None:
             raise ValueError(
-                f"Missing MongoDB connection string environment variable (MONGODB_CONNECTION_STRING)"
+                "Missing MongoDB connection string environment variable (MONGODB_CONNECTION_STRING)"
             )
         database = getenv("MONGODB_DATABASE")
         if database is None:
             raise ValueError(
-                f"Missing MongoDB database environment variable (MONGODB_DATABASE)"
+                "Missing MongoDB database environment variable (MONGODB_DATABASE)"
             )
         collection = getenv("MONGODB_COLLECTION")
         if collection is None:
             raise ValueError(
-                f"Missing MongoDB database collection environment variable (MONGODB_COLLECTION)"
+                "Missing MongoDB database collection environment variable (MONGODB_COLLECTION)"
             )
 
         super().__init__(cxn_string)

@@ -201,7 +201,7 @@ class TechnicalAlertProcess(BaseAlertProcess):
         :param pair: The binance pair corresponding to the alert (for showing chart)
         :return: Tuple = ([successful group ids], [unsuccessful group ids])
         """
-        post = f"🔔 <b>TECHNICAL ALERT:</b> 🔔\n\n" + post
+        post = "🔔 <b>TECHNICAL ALERT:</b> 🔔\n\n" + post
         if pair:
             pair_fmt = pair.replace("/", "_")
             post += f"\n<a href='https://www.binance.com/en/trade/{pair_fmt}?type=spot'><b>View {pair} Chart</b></a>"

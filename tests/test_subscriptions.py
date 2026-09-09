@@ -5,7 +5,6 @@ from unittest.mock import Mock, patch
 
 from src.user_configuration import LocalUserConfiguration
 from src.access_control import get_effective_plan, get_effective_alert_limit
-from src.telegram import TelegramBot
 from src.alert_processes.cex import CEXAlertProcess
 
 
