@@ -114,6 +114,9 @@ class LocalUserConfiguration:
                 default_config["max_alerts"] = PLANS.get("free", 3)
                 default_config["created_at"] = now
                 default_config["updated_at"] = now
+                default_config["plan_start"] = None
+                default_config["plan_expiration"] = None
+                default_config["reminder_state"] = {}
                 _atomic_write_json(self.config_path, default_config)
 
                 with open(self.default_alerts_path, "r", encoding="utf-8") as _in:
@@ -167,6 +170,119 @@ class LocalUserConfiguration:
         config["max_alerts"] = PLANS.get(plan, 3)
         config["updated_at"] = datetime.utcnow().isoformat()
         self.update_config(config)
+
+    def activate_plan(
+        self, plan: str, days: int, command_text: str, message_id: int
+    ) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        config = self.load_config()
+
+        # Replay protection
+        processed_commands = config.get("processed_commands", {})
+        if (
+            str(message_id) in processed_commands
+            and processed_commands[str(message_id)] == command_text
+        ):
+            raise Exception(
+                "This activation command has already been processed (replay protection)."
+            )
+
+        now = datetime.now(timezone.utc)
+        current_plan = config.get("plan", "free")
+        current_expiration_str = config.get("plan_expiration")
+
+        new_expiration = now + timedelta(days=days)
+
+        if current_plan == plan and current_expiration_str:
+            try:
+                current_expiration = datetime.fromisoformat(current_expiration_str)
+                if current_expiration.tzinfo is None:
+                    current_expiration = current_expiration.replace(tzinfo=timezone.utc)
+                if current_expiration > now:
+                    new_expiration = current_expiration + timedelta(days=days)
+            except ValueError:
+                pass
+
+        config["plan"] = plan
+        config["max_alerts"] = PLANS.get(plan, 3)
+        config["plan_start"] = now.isoformat()
+        config["plan_expiration"] = new_expiration.isoformat()
+        config["updated_at"] = now.isoformat()
+        config["reminder_state"] = {}  # Reset reminders
+
+        # Save replay protection state
+        processed_commands[str(message_id)] = command_text
+        # Keep dict small
+        if len(processed_commands) > 100:
+            keys_to_remove = list(processed_commands.keys())[:-100]
+            for k in keys_to_remove:
+                del processed_commands[k]
+        config["processed_commands"] = processed_commands
+
+        self.update_config(config)
+
+    def check_subscription_reminders(self, bot) -> None:
+        from datetime import datetime, timezone
+
+        config = self.load_config()
+        plan = config.get("plan", "free")
+        expiration_str = config.get("plan_expiration")
+
+        if plan == "free" or not expiration_str:
+            return
+
+        try:
+            expiration = datetime.fromisoformat(expiration_str)
+            if expiration.tzinfo is None:
+                expiration = expiration.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return
+
+        now = datetime.now(timezone.utc)
+        time_left = expiration - now
+        days_left = time_left.days
+
+        reminder_state = config.get("reminder_state", {})
+
+        # 3-day reminder
+        if 2 <= days_left <= 3 and not reminder_state.get("3_day"):
+            try:
+                bot.send_message(
+                    self.user_id,
+                    f"Your '{plan}' subscription will expire in {days_left} days. Use /renew to extend your plan.",
+                )
+                reminder_state["3_day"] = True
+                config["reminder_state"] = reminder_state
+                self.update_config(config)
+            except Exception:
+                pass
+
+        # 1-day reminder
+        elif 0 <= days_left <= 1 and not reminder_state.get("1_day"):
+            try:
+                bot.send_message(
+                    self.user_id,
+                    f"Your '{plan}' subscription will expire in {days_left} days (or less). Use /renew to extend your plan.",
+                )
+                reminder_state["1_day"] = True
+                config["reminder_state"] = reminder_state
+                self.update_config(config)
+            except Exception:
+                pass
+
+        # Expired reminder
+        elif days_left < 0 and not reminder_state.get("expired"):
+            try:
+                bot.send_message(
+                    self.user_id,
+                    f"Your '{plan}' subscription has expired. You have been switched to the 'free' plan. Use /renew to upgrade again.",
+                )
+                reminder_state["expired"] = True
+                config["reminder_state"] = reminder_state
+                self.update_config(config)
+            except Exception:
+                pass
 
     def get_channels(self) -> list[str]:
         return self.load_config().get("channels", [])
@@ -232,6 +348,9 @@ class MongoDBUserConfiguration(LocalUserConfiguration):
             default_config["max_alerts"] = PLANS.get("free", 3)
             default_config["created_at"] = datetime.utcnow().isoformat()
             default_config["updated_at"] = datetime.utcnow().isoformat()
+            default_config["plan_start"] = None
+            default_config["plan_expiration"] = None
+            default_config["reminder_state"] = {}
 
             user_document["config"] = default_config
 
@@ -300,6 +419,57 @@ class MongoDBUserConfiguration(LocalUserConfiguration):
         config["plan"] = plan
         config["max_alerts"] = PLANS.get(plan, 3)
         config["updated_at"] = datetime.utcnow().isoformat()
+        self.update_config(config)
+
+    def activate_plan(
+        self, plan: str, days: int, command_text: str, message_id: int
+    ) -> None:
+        """OVERRIDES SUPER - Activate plan in the user document"""
+        from datetime import datetime, timedelta, timezone
+
+        config = self.load_config()
+
+        # Replay protection
+        processed_commands = config.get("processed_commands", {})
+        if (
+            str(message_id) in processed_commands
+            and processed_commands[str(message_id)] == command_text
+        ):
+            raise Exception(
+                "This activation command has already been processed (replay protection)."
+            )
+
+        now = datetime.now(timezone.utc)
+        current_plan = config.get("plan", "free")
+        current_expiration_str = config.get("plan_expiration")
+
+        new_expiration = now + timedelta(days=days)
+
+        if current_plan == plan and current_expiration_str:
+            try:
+                current_expiration = datetime.fromisoformat(current_expiration_str)
+                if current_expiration.tzinfo is None:
+                    current_expiration = current_expiration.replace(tzinfo=timezone.utc)
+                if current_expiration > now:
+                    new_expiration = current_expiration + timedelta(days=days)
+            except ValueError:
+                pass
+
+        config["plan"] = plan
+        config["max_alerts"] = PLANS.get(plan, 3)
+        config["plan_start"] = now.isoformat()
+        config["plan_expiration"] = new_expiration.isoformat()
+        config["updated_at"] = now.isoformat()
+        config["reminder_state"] = {}  # Reset reminders
+
+        # Save replay protection state
+        processed_commands[str(message_id)] = command_text
+        if len(processed_commands) > 100:
+            keys_to_remove = list(processed_commands.keys())[:-100]
+            for k in keys_to_remove:
+                del processed_commands[k]
+        config["processed_commands"] = processed_commands
+
         self.update_config(config)
 
 

@@ -192,7 +192,7 @@ class CEXAlertProcess(BaseAlertProcess):
 
         :return: Tuple = ([successful group ids], [unsuccessful group ids])
         """
-        post = f"🔔 <b>CEX ALERT:</b> 🔔\n\n" + post
+        post = "🔔 <b>CEX ALERT:</b> 🔔\n\n" + post
         if pair:
             pair_fmt = pair.replace("/", "_")
             post += f"\n\n<a href='https://www.binance.com/en/trade/{pair_fmt}?type=spot'><b>View {pair} Chart</b></a>"

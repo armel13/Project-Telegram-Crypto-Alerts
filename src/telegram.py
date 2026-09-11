@@ -166,7 +166,7 @@ class TelegramBot(TeleBot):
                     message, "<b>Assertion Error:</b>\n" f"{exc}", parse_mode="HTML"
                 )
                 return
-            except Exception as exc:
+            except Exception:
                 self.reply_to(
                     message,
                     "Invalid message formatting.\n"
@@ -184,12 +184,13 @@ class TelegramBot(TeleBot):
                 configuration = BaseConfig(str(message.from_user.id))
                 alerts_db = configuration.load_alerts()
 
-                plan = configuration.get_plan()
-                plan_limit = PLANS.get(plan, PLANS["free"])
+                config = configuration.load_config()
+                plan = get_effective_plan(config)
+                plan_limit = get_effective_alert_limit(config)
 
                 if sum(len(alerts) for alerts in alerts_db.values()) >= plan_limit:
                     raise OverflowError(
-                        f"Maximum active alerts reached ({plan_limit}) for your '{plan}' plan. Please contact an admin to upgrade."
+                        f"Maximum active alerts reached ({plan_limit}) for your effective '{plan}' plan. Please contact an admin to upgrade."
                     )
 
                 if indicator_instance.type == "s":
@@ -243,7 +244,7 @@ class TelegramBot(TeleBot):
                 else:
                     alerts_db[pair] = [alert]
                 configuration.update_alerts(alerts_db)
-                self.reply_to(message, f"Successfully activated new alert!")
+                self.reply_to(message, "Successfully activated new alert!")
             except Exception as exc:
                 self.reply_to(message, f"An error occurred:\n{exc}")
                 return
@@ -257,11 +258,11 @@ class TelegramBot(TeleBot):
                 pair, alert_index = self.split_message(message.text)
                 pair = pair.upper()
                 alert_index = int(alert_index)
-            except Exception as exc:
+            except Exception:
                 self.reply_to(
                     message,
-                    f"Invalid message formatting. Please ensure that your message follows this format:\n"
-                    f"/cancel_alert TOKEN1/TOKEN2 alert_index",
+                    "Invalid message formatting. Please ensure that your message follows this format:\n"
+                    "/cancel_alert TOKEN1/TOKEN2 alert_index",
                 )
                 return
 
@@ -331,8 +332,8 @@ class TelegramBot(TeleBot):
             except:
                 self.reply_to(
                     message,
-                    f"Invalid message formatting. Please use the following format:\n"
-                    f"/get_price TOKEN1/TOKEN2",
+                    "Invalid message formatting. Please use the following format:\n"
+                    "/get_price TOKEN1/TOKEN2",
                 )
                 return
             try:
@@ -400,7 +401,7 @@ class TelegramBot(TeleBot):
             output = "<u><b>Simple Indicators:</b></u>\n"
             output += (
                 "<a href='https://github.com/hschickdevs/Telegram-Crypto-Alerts/tree/main#alerts'><b>PRICE</b></a> (Token Pair Spot Price):\n"
-                f"   • <u>Available Comparisons:</u>\n"
+                "   • <u>Available Comparisons:</u>\n"
             )
             for comparison in SIMPLE_INDICATOR_COMPARISONS:
                 output += f"      - <b><i>{comparison}</i></b>\n"
@@ -416,7 +417,7 @@ class TelegramBot(TeleBot):
                     output += (
                         f"      - <b><i>{param}:</i></b> {desc} (Default = {default})\n"
                     )
-                output += f"   • <u>Available Outputs:</u>\n"
+                output += "   • <u>Available Outputs:</u>\n"
                 for output_val in data["output"]:
                     output += f"      - <b><i>{output_val}</i></b>\n"
                 output += "\n"
@@ -547,17 +548,82 @@ class TelegramBot(TeleBot):
         def on_myplan(message):
             user_id = str(message.from_user.id)
             configuration = BaseConfig(user_id)
-            plan = configuration.get_plan()
-            plan_limit = PLANS.get(plan, PLANS["free"])
+
+            config = configuration.load_config()
+            stored_plan = configuration.get_plan()
+            effective_plan = get_effective_plan(config)
+            plan_limit = get_effective_alert_limit(config)
             alerts_db = configuration.load_alerts()
             active_alerts = sum(len(alerts) for alerts in alerts_db.values())
 
+            expiration = config.get("plan_expiration")
+            expiration_msg = ""
+            if expiration and stored_plan != "free":
+                try:
+                    exp_date = datetime.fromisoformat(expiration).strftime(
+                        "%Y-%m-%d %H:%M UTC"
+                    )
+                    expiration_msg = f"Plan Expiration: {exp_date}\n"
+                except Exception:
+                    pass
+
             msg = (
-                f"Your Current Plan: {plan}\n"
+                f"Your Stored Plan: {stored_plan}\n"
+                f"Your Effective Plan: {effective_plan}\n"
+                f"{expiration_msg}"
                 f"Alert Quota: {active_alerts} / {plan_limit} active alerts\n\n"
+                "To renew your plan, use /renew.\n"
                 "If you wish to upgrade, please contact an administrator."
             )
             self.reply_to(message, msg)
+
+        @self.message_handler(commands=["renew"])
+        @self.is_whitelisted
+        def on_renew(message):
+            msg = (
+                "To renew or purchase a subscription, please send payment manually.\n\n"
+                "Payment options: ...\n"
+                "Support contact: @admin\n\n"
+                "Once paid, an administrator will activate your plan."
+            )
+            self.reply_to(message, msg)
+
+        @self.message_handler(commands=["admin_activate"])
+        @self.is_admin
+        def on_admin_activate(message):
+            splt_msg = self.split_message(message.text)
+            if len(splt_msg) != 3:
+                self.reply_to(
+                    message,
+                    "Usage: /admin_activate <USER_ID> <PLAN> <DAYS>\nAvailable plans: basic, pro",
+                )
+                return
+
+            target_user = splt_msg[0]
+            new_plan = splt_msg[1].lower()
+            try:
+                days = int(splt_msg[2])
+                if days <= 0:
+                    raise ValueError
+            except ValueError:
+                self.reply_to(message, "DAYS must be a positive integer.")
+                return
+
+            if new_plan not in ["basic", "pro"]:
+                self.reply_to(message, "Invalid plan. Must be basic or pro.")
+                return
+
+            try:
+                target_config = BaseConfig(target_user)
+                target_config.activate_plan(
+                    new_plan, days, message.text, message.message_id
+                )
+                self.reply_to(
+                    message,
+                    f"Successfully activated '{new_plan}' plan for {days} days for user {target_user}.",
+                )
+            except Exception as exc:
+                self.reply_to(message, f"An error occurred: {exc}")
 
         @self.message_handler(commands=["admin_setplan"])
         @self.is_admin
@@ -820,7 +886,7 @@ class TelegramBot(TeleBot):
         try:
             data = fetch_binance_market_data(pair.replace("/", "").upper())
             return round(float(data["lastPrice"]), 3)
-        except ValueError as exc:
+        except ValueError:
             raise ValueError(
                 f"{pair} is not a valid pair.\n"
                 "Please make sure to use this formatting: TOKEN1/TOKEN2"
@@ -948,7 +1014,7 @@ class TelegramBot(TeleBot):
                 time.sleep(5)
             except Exception as exc:
                 logger.critical(
-                    f"Unexpected error has occurred while polling - Retrying in 30 seconds...",
+                    "Unexpected error has occurred while polling - Retrying in 30 seconds...",
                     exc_info=exc,
                 )
                 time.sleep(30)

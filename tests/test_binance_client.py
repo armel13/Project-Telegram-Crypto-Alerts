@@ -1,4 +1,5 @@
-import pytest, responses
+import pytest
+import responses
 from src.binance_client import fetch_binance_market_data
 
 
