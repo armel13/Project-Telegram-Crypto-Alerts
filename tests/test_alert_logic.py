@@ -106,8 +106,6 @@ def test_worker_loops_continue_on_exception(mocker):
     mock_sleep.assert_called_with(15)
 
 
-
-
 def test_alert_cooldown_manager():
     manager = AlertCooldownManager(cooldown_seconds=300)
 
