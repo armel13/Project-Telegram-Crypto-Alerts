@@ -22,6 +22,9 @@ from .models import TechnicalAlert, CEXAlert
 
 from telebot import TeleBot, types
 from requests.exceptions import ReadTimeout
+import requests
+import json
+from typing import Any
 
 from .binance_client import fetch_binance_market_data
 
@@ -999,6 +1002,63 @@ class TelegramBot(TeleBot):
         )
 
         return CEXAlert(pair, indicator)
+
+
+def send_tradingview_signal_alert(
+    bot_token: str, chat_id: str, signal: dict[str, Any]
+) -> dict[str, Any]:
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+
+    symbol = signal["symbol"]
+    side = signal["side"]
+    timeframe = signal.get("timeframe", "15m")
+    price = signal["price"]
+    strategy = signal.get("strategy", "TradingView Alert")
+    stop_loss = signal.get("stop_loss")
+    take_profit = signal.get("take_profit")
+    rsi = signal.get("rsi")
+    exchange = signal.get("exchange", "OANDA")
+
+    header_icon = (
+        "🟢 BUY" if side == "BUY" else "🔴 SELL" if side == "SELL" else "🔔 ALERT"
+    )
+
+    msg_parts = [
+        f"*{header_icon} {symbol}* `[{timeframe}]`",
+        f"*Strategy:* {strategy}",
+        f"*Entry Price:* `{price}`",
+    ]
+
+    if stop_loss is not None:
+        msg_parts.append(f"*Stop Loss:* `{stop_loss}`")
+    if take_profit is not None:
+        msg_parts.append(f"*Take Profit:* `{take_profit}`")
+    if rsi is not None:
+        rsi_status = ""
+        if rsi >= 70:
+            rsi_status = " (OVERBOUGHT)"
+        elif rsi <= 30:
+            rsi_status = " (OVERSOLD)"
+        msg_parts.append(f"*RSI:* `{rsi}`{rsi_status}")
+
+    text = "\n".join(msg_parts)
+
+    chart_url = f"https://www.tradingview.com/chart/?symbol={exchange}:{symbol}"
+
+    reply_markup = {
+        "inline_keyboard": [[{"text": "📈 Open TradingView Chart", "url": chart_url}]]
+    }
+
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown",
+        "reply_markup": json.dumps(reply_markup),
+    }
+
+    response = requests.post(url, data=payload, timeout=10)
+    response.raise_for_status()
+    return response.json()
 
     def run(self):
         logger.warn(f"{self.get_me().username} started at {datetime.utcnow()} UTC+0")
